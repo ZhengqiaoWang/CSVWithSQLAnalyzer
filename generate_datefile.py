@@ -3,6 +3,7 @@ import sqlite3
 import os
 import csv
 from typing import List, Dict
+import time
 
 
 def parse_args():
@@ -59,16 +60,41 @@ def create_table(conn: sqlite3.Connection, table_name: str, columns: List[str]):
 
 # 将csv数据写入数据库
 def write_csv_data_to_db(conn: sqlite3.Connection, table_name: str, csv_file_path: str):
+    start_time = time.time()
     cursor = conn.cursor()
+    record_num = 0
     with open(csv_file_path, "r") as f:
         reader = csv.reader(f)
         headers = [col.strip().strip('"') for col in next(reader)]
         create_table(conn, table_name, headers)
+        
+        rows_cache=[]
+        sql = f"INSERT INTO {table_name} VALUES ({', '.join(['?'] * len(headers))})"
+        
         for row in reader:
-            sql = f"INSERT INTO {table_name} VALUES ({', '.join(['?'] * len(row))})"
-            cursor.execute(sql, [x.strip().strip('"') for x in row])
+            rows_cache.append([x.strip().strip('"') for x in row])
+            record_num += 1
+            
+            if len(rows_cache) >= 10:
+                cursor.executemany(sql, rows_cache)
+                conn.commit()
+                rows_cache.clear()
+        if len(rows_cache) > 0:
+            cursor.executemany(sql, rows_cache)
             conn.commit()
+            rows_cache.clear()
+
     cursor.close()
+
+    print(
+        "\t",
+        table_name,
+        "insert",
+        record_num,
+        "rows, cost:",
+        time.time() - start_time,
+        "s",
+    )
     return True
 
 
@@ -77,7 +103,13 @@ if __name__ == "__main__":
 
     # 创建sqlite数据库连接
     conn = sqlite3.connect(args.output_db)
+    # 优化sqlite写入性能
+    conn.execute("PRAGMA synchronous = OFF")
+    conn.execute("PRAGMA journal_mode = MEMORY")
+    
+    
     for file_name, file_path in scan_csv_files(args.csv_folder).items():
+
         table_name = get_table_name(file_name)
         print(
             "Creating and Writing data to table: {} ({})".format(table_name, file_name)
